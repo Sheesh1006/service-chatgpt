@@ -1,0 +1,7 @@
+chatgpt_service @ git+https://github.com/Sheesh1006/proto.git@6926fb502090a5fc76224358c6069f72519307be#subdirectory=gen/chatgpt_service
+grpcio==1.71.0
+grpcio-tools==1.71.0
+munch==4.0.0
+protobuf==5.29.4
+PyYAML==6.0.2
+setuptools==78.1.0

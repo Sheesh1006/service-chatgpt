@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.2
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -6,7 +5,6 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies including Git, gcc, etc.
 RUN apt-get update && apt-get install -y \
     git \
     gcc \
@@ -16,19 +14,18 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container
 COPY requirements.txt .
 
-# Use BuildKit secret to temporarily access the GitHub token
-# Here we read the token from the mounted secret and modify the requirements.txt accordingly.
-# Adjust the sed command if you need to target specific lines or repositories.
-RUN --mount=type=secret,id=github_token \
-    sh -c 'GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-           sed -i "s#git+https://github.com#git+https://${GITHUB_TOKEN}:@github.com#g" requirements.txt && \
-           pip install --upgrade pip && \
-           pip install --no-cache-dir -r requirements.txt'
+# Copy .netrc containing GitHub token into place (used by git clone)
+COPY .netrc /root/.netrc
 
-# Copy the rest of your application code
+# Optional: secure .netrc
+RUN chmod 600 /root/.netrc
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    rm /root/.netrc  # remove the token after use
+
 COPY . .
 
 EXPOSE 50051

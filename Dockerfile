@@ -4,7 +4,9 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    libgl1-mesa-glx  && \
+    apt-get install -y python3-opencv libgl1 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Установка переменных окружения
 ENV PYTHONDONTWRITEBYTECODE=1

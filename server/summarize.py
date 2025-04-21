@@ -2,135 +2,152 @@ import ffmpeg
 from faster_whisper import WhisperModel
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import cv2
+import numpy as np
+import easyocr
+from PIL import Image
+import imagehash
+import soundfile as sf
+import os
+from io import BytesIO
+import tempfile
 import re
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
-
-pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
 
 class Summarizer(object):
     def __init__(self, data):
-        audio_path = self.extract_audio_from_bytes(data)
-        transcript, full_text = self.transcribe_audio(audio_path)
-        summary_sentences = self.summarize_text(full_text)
-        timestamps = self.extract_key_timestamps(summary_sentences, transcript)
-        title = "Краткий конспект видео"
-        self.export_to_pdf(title, timestamps, summary_sentences)
+        self.reader = easyocr.Reader(['en', 'ru'])
+        print("Going to work")
+        audio_data = self._extract_audio(data)
+        print("Extracted Audio")
+        self.transcript, self.full_text = self._transcribe_audio(audio_data)
+        print("Transcribed Audio")
     
-    def extract_audio_from_bytes(video_bytes, output_audio_path: str = 'audio.wav'):
-        process = (
-            ffmpeg
-            .input('pipe:', format='mp4')  # adjust if needed (e.g., 'webm', etc.)
-            .output(output_audio_path, ac=1, ar='16000')
-            .overwrite_output()
-            .run_async(pipe_stdin=True)
-        )
-        process.stdin.write(video_bytes)
-        process.stdin.close()
-        process.wait()
-        return output_audio_path
-    
-    def transcribe_audio(self, audio_path: str, model_size: str = "medium", lang: str = "ru") -> tuple[list, str]:
-        # print("🧠 Распознавание речи с помощью faster-whisper...")
-        model = WhisperModel(model_size, device="auto", compute_type="int8")
-        segments, _ = model.transcribe(audio_path, language=lang)
+    def _has_table(self, image_path, min_lines=10):
+        try:
+            result = self.reader.readtext(image_path, detail=0)
+            return len(result) >= min_lines
+        except Exception as e:
+            print(f"⚠️ Ошибка при анализе {image_path}: {e}")
+            return False
 
-        transcript = []
-        for segment in segments:
-            transcript.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip()
-            })
+    def _crop_table_region(self, image_path):
+        result = self.reader.readtext(image_path)
+        if not result:
+            return None
 
-        full_text = " ".join([s["text"] for s in transcript])
-        return transcript, full_text.strip()
-    
-    def deduplicate_sentences(self, sentences):
-        seen = set()
-        unique = []
-        for sentence in sentences:
-            s = sentence.strip()
+        coords = []
+        for block in result:
+            points = block[0]
+            for x, y in points:
+                coords.append((int(x), int(y)))
+
+        if not coords:
+            return None
+
+        xs, ys = zip(*coords)
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        image = Image.open(image_path)
+        cropped = image.crop((x_min - 10, y_min - 10, x_max + 10, y_max + 10))
+        return cropped
+
+    def _split_into_sentences(self, text):
+        return [s for s in re.split(r'(?<=[.!?])\s+', text.strip()) if len(s) > 0]
+
+    def _deduplicate(self, sentences):
+        seen, result = set(), []
+        for s in sentences:
             if s not in seen:
                 seen.add(s)
-                unique.append(s)
-        return unique
-    
-    def split_into_sentences(self, text):
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-        return [s for s in sentences if len(s.strip()) > 0]
-    
-    def summarize_text(self, text, model_name: str = "ai-forever/sbert_large_nlu_ru", summary_size: int = 7):
-        # print("📚 Создание краткого конспекта (SBERT)...")
+                result.append(s)
+        return result
+
+    def summarize_text(self, model_name="ai-forever/sbert_large_nlu_ru", size=7):
         model = SentenceTransformer(model_name)
-
-        sentences = self.split_into_sentences(text)
-        sentences = self.deduplicate_sentences(sentences)
-
-        if len(sentences) <= summary_size:
-            return sentences
-
-        embeddings = model.encode(sentences, convert_to_tensor=True)
-        centroid = embeddings.mean(dim=0)
-        similarities = cosine_similarity(centroid.unsqueeze(0).cpu().numpy(), embeddings.cpu().numpy())[0]
-
-        top_indices = similarities.argsort()[-summary_size:][::-1]
-        summary = [sentences[i] for i in sorted(top_indices)]
-        return summary
+        sents = self._deduplicate(self._split_into_sentences(self.full_text))
+        if len(sents) <= size:
+            return sents
+        emb = model.encode(sents, convert_to_tensor=True)
+        center = emb.mean(dim=0)
+        sims = cosine_similarity(center.unsqueeze(0).cpu().numpy(), emb.cpu().numpy())[0]
+        top = sorted(np.argsort(sims)[-size:])
+        self.summary = [sents[i] for i in top]
+        return self.summary
     
-    def extract_key_timestamps(self, summary_sentences, transcript) -> list[str]:
-        timestamps = []
-        for s in summary_sentences:
-            for entry in transcript:
-                if s[:20] in entry['text']:
-                    timestamps.append(f"- {entry['start']:.0f}s: {entry['text'][:60]}...")
+    def _extract_audio(self, video_bytes):
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as temp_video:
+            temp_video.write(video_bytes)
+            temp_video.flush()
+
+            try:
+                out, err = (
+                    ffmpeg
+                    .input(temp_video.name)
+                    .output('pipe:1', format='wav', ac=1, ar='16000')
+                    .overwrite_output()
+                    .run(
+                        capture_stdout=True,
+                        capture_stderr=True
+                    )
+                )
+                return out
+            except ffmpeg.Error as e:
+                print("⚠️ ffmpeg error:\n", e.stderr.decode(errors="ignore"))
+                raise
+
+    def _transcribe_audio(self, audio_bytes, model_size="medium", lang="ru"):
+        model = WhisperModel(model_size, device="auto", compute_type="int8")
+        audio_buffer = BytesIO(audio_bytes)
+        audio_data, _ = sf.read(audio_buffer)
+
+        segments, _ = model.transcribe(audio_data, language=lang)
+        transcript = []
+        for segment in segments:
+            transcript.append({"start": segment.start, "text": segment.text.strip()})
+        full_text = " ".join([s["text"] for s in transcript])
+        return transcript, full_text.strip()
+
+    def extract_timestamps(self):
+        result = []
+        for s in self.summary:
+            for seg in self.transcript:
+                if s[:20] in seg["text"]:
+                    result.append(f"- {int(seg['start'])}s: {seg['text'][:60]}...")
                     break
-        return timestamps
-    
-    def wrap_text(text, width, canvas_obj, font_name, font_size):
-        words = text.split()
-        lines = []
-        line = ''
-        space_width = canvas_obj.stringWidth(' ', font_name, font_size)
-        for word in words:
-            word_width = canvas_obj.stringWidth(word, font_name, font_size)
-            line_width = canvas_obj.stringWidth(line, font_name, font_size)
-            if line_width + word_width + space_width <= width:
-                line += word + ' '
-            else:
-                lines.append(line.strip())
-                line = word + ' '
-        if line:
-            lines.append(line.strip())
-        return lines
-    
-    def export_to_pdf(self, title: str, timestamps, summary_lines, output_path="summary.pdf"):
-        # print("🖨️ Экспорт в PDF...")
-        c = canvas.Canvas(output_path, pagesize=A4)
-        width, height = A4
-        x, y = 50, height - 50
+        return result
 
-        c.setFont("DejaVuSans", 16)
-        c.drawString(x, y, title)
-        y -= 30
+    def extract_keyframes(self, video_path, output_dir="video_keyframes", interval_sec=10, max_frames=20, hash_threshold=5):
+        os.makedirs(output_dir, exist_ok=True)
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        count = 0
+        extracted = 0
+        table_frames = []
+        prev_hash = None
 
-        c.setFont("DejaVuSans", 12)
-        for t in timestamps:
-            c.drawString(x, y, t)
-            y -= 20
-        y -= 10
+        while cap.isOpened() and extracted < max_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, count * fps * interval_sec)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
 
-        for s in summary_lines:
-            wrapped_lines = self.wrap_text(f"• {s.strip()}", width - 2 * x, c, "DejaVuSans", 12)
-            for line in wrapped_lines:
-                c.drawString(x, y, line)
-                y -= 18
-                if y < 50:
-                    c.showPage()
-                    y = height - 50
-                    c.setFont("DejaVuSans", 12)
+            temp_path = os.path.join(output_dir, "temp.jpg")
+            cv2.imwrite(temp_path, frame)
 
-        c.save()
+            if self._has_table(temp_path):
+                cropped = self._crop_table_region(temp_path)
+                if cropped is not None:
+                    curr_hash = imagehash.average_hash(cropped)
+                    if prev_hash is None or abs(curr_hash - prev_hash) >= hash_threshold:
+                        out_path = os.path.join(output_dir, f"frame_{count + 1}.jpg")
+                        cropped.save(out_path)
+                        table_frames.append(out_path)
+                        prev_hash = curr_hash
+
+            extracted += 1
+            count += 1
+
+        cap.release()
+        return table_frames

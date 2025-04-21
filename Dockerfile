@@ -17,9 +17,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Замена placeholder на реальный токен и установка зависимостей
-ARG GITHUB_TOKEN
-RUN sed -i "s/\${GITHUB_TOKEN}/$GITHUB_TOKEN/g" requirements.txt && \
-    pip install --upgrade pip && \
+#ARG GITHUB_TOKEN
+RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копирование остального кода

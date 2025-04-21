@@ -4,7 +4,7 @@ cffi==1.17.1
 chardet==5.2.0
 charset-normalizer==3.4.1
 #chatgpt_service @ git+https://github.com/Sheesh1006/proto.git@d39873b57109a2940c5458ab0b528e72d92017cd#subdirectory=gen/chatgpt_service
-git+https://${GITHUB_TOKEN}@github.com/Sheesh1006/proto.git@main#subdirectory=gen/chatgpt_service
+git+https://@github.com/Sheesh1006/proto.git@main#subdirectory=gen/chatgpt_service
 coloredlogs==15.0.1
 ctranslate2==4.6.0
 easyocr==1.7.2

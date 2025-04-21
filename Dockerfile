@@ -1,30 +1,29 @@
-# Базовый образ
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    libgl1-mesa-glx  && \
-    apt-get install -y python3-opencv libgl1 && \
-    rm -rf /var/lib/apt/lists/*
+# Install system dependencies including ffmpeg and OpenCV support
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       git \
+       build-essential \
+       ffmpeg \
+       python3-opencv \
+       libgl1-mesa-glx \
+    && rm -rf /var/lib/apt/lists/*
 
-# Установка переменных окружения
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Prevent Python from writing .pyc files and enable unbuffered logs
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Создание рабочей директории
+# Set working directory
 WORKDIR /app
 
-# Копирование requirements.txt
-COPY requirements.txt .
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Замена placeholder на реальный токен и установка зависимостей
-#ARG GITHUB_TOKEN
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Copy application code
+COPY . ./
 
-# Копирование остального кода
-COPY . .
-
-# Команда для запуска приложения
+# Default command
 CMD ["python", "main.py"]

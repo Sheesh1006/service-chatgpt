@@ -1,33 +1,29 @@
+# Базовый образ
 FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
     git \
-    gcc \
     build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
+# Установка переменных окружения
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование requirements.txt
 COPY requirements.txt .
 
-# Copy .netrc containing GitHub token into place (used by git clone)
-COPY .netrc /root/.netrc
+# Замена placeholder на реальный токен и установка зависимостей
+ARG GITHUB_TOKEN
+RUN sed -i "s/\${GITHUB_TOKEN}/$GITHUB_TOKEN/g" requirements.txt && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Optional: secure .netrc
-RUN chmod 600 /root/.netrc
-
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    rm /root/.netrc  # remove the token after use
-
+# Копирование остального кода
 COPY . .
 
-EXPOSE 50051
-
+# Команда для запуска приложения
 CMD ["python", "main.py"]

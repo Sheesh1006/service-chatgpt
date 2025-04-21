@@ -8,7 +8,6 @@ import easyocr
 from PIL import Image
 import imagehash
 import soundfile as sf
-import os
 from io import BytesIO
 import tempfile
 import re
@@ -16,6 +15,7 @@ import re
 
 class Summarizer(object):
     def __init__(self, data):
+        self.video_bytes = data
         self.reader = easyocr.Reader(['en', 'ru'])
         print("Going to work")
         audio_data = self._extract_audio(data)
@@ -23,16 +23,18 @@ class Summarizer(object):
         self.transcript, self.full_text = self._transcribe_audio(audio_data)
         print("Transcribed Audio")
     
-    def _has_table(self, image_path, min_lines=10):
+    def _has_table(self, image: Image, min_lines=10):
+        img_np = np.array(image.convert("RGB"))
         try:
-            result = self.reader.readtext(image_path, detail=0)
+            result = self.reader.readtext(img_np, detail=0)
             return len(result) >= min_lines
         except Exception as e:
-            print(f"⚠️ Ошибка при анализе {image_path}: {e}")
+            print(f"⚠️ Ошибка при анализе {img_np}: {e}")
             return False
 
-    def _crop_table_region(self, image_path):
-        result = self.reader.readtext(image_path)
+    def _crop_table_region(self, image: Image):
+        img_np = np.array(image.convert("RGB"))
+        result = self.reader.readtext(img_np)
         if not result:
             return None
 
@@ -49,7 +51,6 @@ class Summarizer(object):
         x_min, x_max = min(xs), max(xs)
         y_min, y_max = min(ys), max(ys)
 
-        image = Image.open(image_path)
         cropped = image.crop((x_min - 10, y_min - 10, x_max + 10, y_max + 10))
         return cropped
 
@@ -118,36 +119,36 @@ class Summarizer(object):
                     break
         return result
 
-    def extract_keyframes(self, video_path, output_dir="video_keyframes", interval_sec=10, max_frames=20, hash_threshold=5):
-        os.makedirs(output_dir, exist_ok=True)
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        count = 0
-        extracted = 0
-        table_frames = []
-        prev_hash = None
+    def extract_keyframes(self, interval_sec=10, max_frames=20, hash_threshold=5) -> list[Image.Image]:
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+            tmp.write(self.video_bytes)
+            tmp.flush()
+            cap = cv2.VideoCapture(tmp.name)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            count = 0
+            extracted = 0
+            table_frames = []
+            prev_hash = None
 
-        while cap.isOpened() and extracted < max_frames:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, count * fps * interval_sec)
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                break
+            while cap.isOpened() and extracted < max_frames:
+                frame_idx = int(count * fps * interval_sec)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    break
 
-            temp_path = os.path.join(output_dir, "temp.jpg")
-            cv2.imwrite(temp_path, frame)
+                pil_frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-            if self._has_table(temp_path):
-                cropped = self._crop_table_region(temp_path)
-                if cropped is not None:
-                    curr_hash = imagehash.average_hash(cropped)
-                    if prev_hash is None or abs(curr_hash - prev_hash) >= hash_threshold:
-                        out_path = os.path.join(output_dir, f"frame_{count + 1}.jpg")
-                        cropped.save(out_path)
-                        table_frames.append(out_path)
-                        prev_hash = curr_hash
+                if self._has_table(pil_frame):
+                    cropped = self._crop_table_region(pil_frame)
+                    if cropped is not None:
+                        curr_hash = imagehash.average_hash(cropped)
+                        if prev_hash is None or abs(curr_hash - prev_hash) >= hash_threshold:
+                            table_frames.append(cropped)
+                            prev_hash = curr_hash
 
-            extracted += 1
-            count += 1
+                extracted += 1
+                count += 1
 
-        cap.release()
+            cap.release()
         return table_frames

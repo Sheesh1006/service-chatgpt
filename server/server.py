@@ -6,6 +6,7 @@ from chatgpt_service.chatgpt_service_pb2 import (
     GetKeyFramesRequest, GetKeyFramesResponse
 )
 import grpc
+from io import BytesIO
 from .summarize import Summarizer
 
 
@@ -34,6 +35,7 @@ class ChatGPTServiceServicer(chatgpt_service_pb2_grpc.ChatGPTServiceServicer):
         request: GetTimestampsRequest,
         context
     ) -> Iterator[GetTimestampsResponse]:
+        print("Extracting timestamps")
         raw_timestamps = self.summarizer.extract_timestamps()
         yield GetTimestampsResponse(timestamps='###'.join(raw_timestamps))
     
@@ -42,5 +44,10 @@ class ChatGPTServiceServicer(chatgpt_service_pb2_grpc.ChatGPTServiceServicer):
         request: GetKeyFramesRequest,
         context
     ) -> Iterator[GetKeyFramesResponse]:
+        print("Extracting key frames")
         raw_keyframes = self.summarizer.extract_keyframes()
-        yield GetKeyFramesResponse(keyframes='')
+        for img in raw_keyframes:
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG")
+            img_bytes = buffer.getvalue()
+            yield GetKeyFramesResponse(keyframes=[img_bytes])
